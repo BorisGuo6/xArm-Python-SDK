@@ -217,6 +217,11 @@ class _BlocklyBase(_BlocklyNode):
                 format(direction_li.index(direction), direction_li.index(direction))
         elif block.attrib['type'] == 'get_counter':
             return 'self._arm.count'
+        elif block.attrib['type'] == 'get_single_holding_register':
+            fields = self._get_nodes('field', root=block)
+            addr = int(fields[0].text.replace(' ', '').replace('0x', '').replace(',', '').replace('\xa0', ''), 16)
+            return "list(map(lambda x: hex(x).split('0x')[1].upper().zfill(4)[:2] + ' ' + hex(x).split('0x')[1]." \
+                   "upper().zfill(4)[2:], self._arm.read_holding_registers({}, 1)[1]))[0]".format(str(addr))
 
 
     def __get_logic_compare(self, block, arg_map=None):
@@ -228,7 +233,7 @@ class _BlocklyBase(_BlocklyNode):
             cond_a = self._get_condition_expression(values[0], arg_map=arg_map)
             if len(values) > 1:
                 cond_b = self._get_condition_expression(values[1], arg_map=arg_map)
-        return '{} {} {}'.format(cond_a, op, cond_b)
+        return '({}) {} ({})'.format(cond_a, op, cond_b)
 
     def __get_logic_operation(self, block, arg_map=None):
         op = self._get_node('field', block).text.lower()
@@ -239,7 +244,7 @@ class _BlocklyBase(_BlocklyNode):
             cond_a = self._get_condition_expression(values[0], arg_map=arg_map)
             if len(values) > 1:
                 cond_b = self._get_condition_expression(values[1], arg_map=arg_map)
-        return '{} {} {}'.format(cond_a, op, cond_b)
+        return '({}) {} ({})'.format(cond_a, op, cond_b)
 
     def __get_math_arithmetic(self, block, arg_map=None):
         field = self._get_node('field', block).text

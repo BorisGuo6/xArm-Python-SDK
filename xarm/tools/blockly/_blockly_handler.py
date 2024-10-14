@@ -24,16 +24,19 @@ class _BlocklyHandler(_BlocklyBase):
         self._main_run_code_list = []
         self._is_main_run_code = True
         self._is_exec = False
+        self._is_ide = False
 
         self._listen_tgpio_digital = False
         self._listen_tgpio_analog = False
         self._listen_cgpio_state = False
         self._listen_count = False
+        self._listen_holding = False
         self._tgpio_digital_callbacks = []
         self._tgpio_analog_callbacks = []
         self._cgpio_digital_callbacks = []
         self._cgpio_analog_callbacks = []
         self._count_callbacks= []
+        self._holding_callbacks= []
 
         self.is_run_linear_track = False
         self._is_run_blockly = False
@@ -361,7 +364,7 @@ class _BlocklyHandler(_BlocklyBase):
     def _handle_tool_message(self, block, indent=0, arg_map=None):
         fields = self._get_nodes('field', block)
         color = json.dumps(fields[0].text, ensure_ascii=False) if len(fields) > 1 else 'white'
-        msg = json.dumps(fields[1].text if fields[-1].text is not None else '', ensure_ascii=False)
+        msg = json.dumps(fields[2].text if fields[-1].text is not None else '', ensure_ascii=False)
         if self._highlight_callback is not None:
             self._append_main_code('print({}, color={})'.format(msg, color), indent + 2)
         else:
@@ -395,8 +398,11 @@ class _BlocklyHandler(_BlocklyBase):
 
     def _handle_wait(self, block, indent=0, arg_map=None):
         value = self._get_node('value', root=block)
-        value = self._get_nodes('field', root=value, descendant=True)[0].text
-        self._append_main_code('time.sleep({})'.format(value), indent + 2)
+        value = float(self._get_nodes('field', root=value, descendant=True)[0].text)
+        self._append_main_code('for i in range({}):'.format(int(value / 0.1)), indent + 2)
+        self._append_main_code('    time.sleep(0.1)', indent + 2)
+        self._append_main_code('    if not self.is_alive:', indent=indent + 2)
+        self._append_main_code('        return', indent=indent + 2)
 
     def _handle_gpio_get_digital(self, block, indent=0, arg_map=None):
         io = self._get_node('field', block).text
@@ -783,7 +789,34 @@ class _BlocklyHandler(_BlocklyBase):
                 trigger = fields[2].text
                 self._cgpio_analog_callbacks.append(name)
                 self._append_main_code('self._cgpio_analog_callbacks.append({{\'io\': {}, \'trigger\': {}, \'op\': \'{}\', \'callback\': self.{}}})'.format(io, trigger, op, name), indent=indent+2)
+    
+    def _handle_event_get_holding_condition(self, block, indent=0, arg_map=None):
+        fields = self._get_nodes('field', root=block)
+        addr = int(fields[0].text.replace(' ', '').replace('0x','').replace(',','').replace('\xa0', ''), 16)
+        trigger = int(fields[1].text.replace(' ', '').replace('0x','').replace(',','').replace('\xa0', ''), 16)
 
+        num = 1
+
+        self._is_main_run_code = False
+        num = len(self._holding_callbacks) + 1
+        name = 'holding_is_changed_callback_{}'.format(num)
+        self._append_main_code('# Define Holding Registers {} Value is {} callback'.format(
+            addr, trigger), indent=1)
+
+        self._append_main_code('def {}(self):'.format(name), indent=1)
+        statement = self._get_node('statement', root=block)
+        if statement:
+            self._parse_block(statement, indent, arg_map=arg_map)
+        else:
+            self._append_main_code('pass', indent=indent + 3)
+        self._append_main_code('')
+
+        self._is_main_run_code = True
+        self._holding_callbacks.append(name)
+        self._append_main_code(
+            'self._holding_callbacks.append({{\'trigger\': \'{}\', \'addr\': \'{}\', \'callback\': self.{}}})'.format(
+                trigger, addr, name), indent=indent + 2)
+    
     def __handle_count_event(self, count_type, block, indent=0, arg_map=None):
         fields = self._get_nodes('field', root=block)
         op = fields[0].text
@@ -1087,7 +1120,9 @@ class _BlocklyHandler(_BlocklyBase):
                 prev_is_empty = True
             else:
                 prev_is_empty = False
-            if self._is_exec and code.strip():
+            if (self._is_exec or (not self._is_exec and not self._is_ide)) and code.strip() and code not in \
+                    ['finally:', 'else:'] and all([i not in code for i in ['elif', 'except', 'def', 'class']]) \
+                    and not code.startswith('@'):
                 code_indent = re.match('(\s*).*', code).group(1)
                 self._append_main_code(code_indent + 'if not self.is_alive:', indent + 2)
                 self._append_main_code(code_indent + 'return', indent + 3)
@@ -1179,5 +1214,15 @@ class _BlocklyHandler(_BlocklyBase):
         projectName = fields[0].text
         fileName = fields[1].text
         times = fields[2].text
-        self._append_main_code('start_run_gcode(projectName="{}", fileName="{}", times={})'.format(projectName, fileName, times), indent + 2)
+        if self._is_exec:
+            self._append_main_code('start_run_gcode(projectName="{}", fileName="{}", times={})'.format(projectName, fileName, times), indent + 2)
+        else:
+            self._append_main_code("for i in range({}):".format(times), indent + 2)
+            self._append_main_code('    self._arm.run_gcode_app(path="{}")'.format(projectName+fileName), indent + 2)
+
+    def _handle_write_single_holding_register(self, block, indent=0, arg_map=None):
+        fields = self._get_nodes('field', root=block)
+        addr = int(fields[0].text.replace(' ', '').replace('0x','').replace(',','').replace('\xa0', ''), 16)
+        value = int(fields[1].text.replace(' ', '').replace('0x','').replace(',','').replace('\xa0', ''), 16)
+        self._append_main_code('self._arm.write_single_holding_register({}, {})'.format(addr, value), indent + 2)
 

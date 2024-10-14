@@ -7,9 +7,12 @@
 # Author: Vinman <vinman.wen@ufactory.cc> <vinman.cub@gmail.com>
 
 import os
+import re
 import math
+import sys
 import time
 import uuid
+import socket
 import warnings
 from collections.abc import Iterable
 from ..core.config.x_config import XCONF
@@ -46,7 +49,7 @@ class XArm(Gripper, Servo, Record, RobotIQ, BaseBoard, Track, FtSensor, ModbusTc
         Base.__init__(self, port, is_radian, do_not_open, **kwargs)
 
     def _is_out_of_tcp_range(self, value, i):
-        if not self._check_tcp_limit or self._stream_type != 'socket' or not self._enable_report:
+        if not self._check_tcp_limit or self._stream_type != 'socket' or not self._enable_report or value == math.inf:
             return False
         tcp_range = XCONF.Robot.TCP_LIMITS.get(self.axis).get(self.device_type, [])
         if 2 < i < len(tcp_range):  # only limit rotate
@@ -63,9 +66,10 @@ class XArm(Gripper, Servo, Record, RobotIQ, BaseBoard, Track, FtSensor, ModbusTc
         return False
 
     def _is_out_of_joint_range(self, angle, i):
-        if not self._check_joint_limit or self._stream_type != 'socket' or not self._enable_report:
+        if not self._check_joint_limit or self._stream_type != 'socket' or not self._enable_report or angle == math.inf:
             return False
-        joint_limit = XCONF.Robot.JOINT_LIMITS.get(self.axis).get(self.device_type, [])
+        device_type = int('{}1305'.format(self.axis)) if self.sn and int(self.sn[2:6]) >= 1305 and int(self.sn[2:6]) < 8500 else self.device_type
+        joint_limit = XCONF.Robot.JOINT_LIMITS.get(self.axis).get(device_type, [])
         if i < len(joint_limit):
             angle_range = joint_limit[i]
             if angle < angle_range[0] - math.radians(0.1) or angle > angle_range[1] + math.radians(0.1):
@@ -132,12 +136,12 @@ class XArm(Gripper, Servo, Record, RobotIQ, BaseBoard, Track, FtSensor, ModbusTc
         is_radian = self._default_is_radian if is_radian is None else is_radian
         only_check_type = kwargs.get('only_check_type', self._only_check_type)
         tcp_pos = [
-            self._last_position[0] if x is None else float(x),
-            self._last_position[1] if y is None else float(y),
-            self._last_position[2] if z is None else float(z),
-            self._last_position[3] if roll is None else to_radian(roll, is_radian),
-            self._last_position[4] if pitch is None else to_radian(pitch, is_radian),
-            self._last_position[5] if yaw is None else to_radian(yaw, is_radian),
+            (math.inf if self.version_is_ge(2, 4, 101) else self._last_position[0]) if x is None else float(x),
+            (math.inf if self.version_is_ge(2, 4, 101) else self._last_position[1]) if y is None else float(y),
+            (math.inf if self.version_is_ge(2, 4, 101) else self._last_position[2]) if z is None else float(z),
+            (math.inf if self.version_is_ge(2, 4, 101) else self._last_position[3]) if roll is None else to_radian(roll, is_radian),
+            (math.inf if self.version_is_ge(2, 4, 101) else self._last_position[4]) if pitch is None else to_radian(pitch, is_radian),
+            (math.inf if self.version_is_ge(2, 4, 101) else self._last_position[5]) if yaw is None else to_radian(yaw, is_radian),
         ]
         motion_type = kwargs.get('motion_type', False)
         for i in range(3):
@@ -460,7 +464,7 @@ class XArm(Gripper, Servo, Record, RobotIQ, BaseBoard, Track, FtSensor, ModbusTc
         if servo_id is not None and servo_id != 8:
             if servo_id > self.axis or servo_id <= 0:
                 return APIState.SERVO_NOT_EXIST
-            angles = [None] * 7
+            angles = [math.inf if self.version_is_ge(2, 4, 101) else None] * 7
             angles[servo_id - 1] = angle
         else:
             angles = angle
@@ -765,7 +769,8 @@ class XArm(Gripper, Servo, Record, RobotIQ, BaseBoard, Track, FtSensor, ModbusTc
             # limits = list(map(lambda x: round(math.radians(x), 3), limits))
 
         for i in range(self.axis):
-            joint_limit = XCONF.Robot.JOINT_LIMITS.get(self.axis).get(self.device_type, [])
+            device_type = int('{}1305'.format(self.axis)) if self.sn and int(self.sn[2:6]) >= 1305 and int(self.sn[2:6]) < 8500 else self.device_type
+            joint_limit = XCONF.Robot.JOINT_LIMITS.get(self.axis).get(device_type, [])
             if i < len(joint_limit):
                 angle_range = joint_limit[i]
                 # angle_range = list(map(lambda x: round(x, 3), joint_limit[i]))
@@ -1259,6 +1264,10 @@ class XArm(Gripper, Servo, Record, RobotIQ, BaseBoard, Track, FtSensor, ModbusTc
                 ret = self.set_servo_zero(servo_id=servo_id)
             elif num == 106:  # H106 get_servo_debug_msg, ex: H106
                 ret = self.get_servo_debug_msg()
+            elif num == 114:  # H114 servo_error_addr_r32, ex H114 I{id} D{addr}
+                servo_id = gcode_p.get_id_num(command, default=0)
+                addr = gcode_p.get_addr(command)
+                ret = self.arm_cmd.servo_error_addr_r32(axis=servo_id, addr=addr)
             else:
                 logger.debug('command {} is not exist'.format(command))
                 ret = APIState.CMD_NOT_EXIST, 'command {} is not exist'.format(command)
@@ -1450,13 +1459,13 @@ class XArm(Gripper, Servo, Record, RobotIQ, BaseBoard, Track, FtSensor, ModbusTc
         try:
             if not os.path.exists(path):
                 dir_name = 'lite6' if self.axis == 6 and self.device_type == 9 else '850' if self.axis == 6 and self.device_type == 12 else 'xarm7T' if self.axis == 7 and self.device_type == 13 else 'xarm{}'.format(self.axis)
-                path = os.path.join(os.path.expanduser('~'), '.UFACTORY', 'projects', 'test', dir_name, 'app', 'myapp', path) # home/uf
+                path = os.path.join('/home/uf' if sys.platform.startswith('linux') else os.path.expanduser('~'), '.UFACTORY', 'projects', 'test', dir_name, 'app', 'myapp', path)
             if os.path.isdir(path):
                 path = os.path.join(path, 'app.xml')
             if not os.path.exists(path):
                 raise FileNotFoundError('{} is not found'.format(path))
             blockly_tool = BlocklyTool(path)
-            succeed = blockly_tool.to_python(arm=self._api_instance, is_exec=True, **kwargs)
+            succeed = blockly_tool.to_python(arm=self._api_instance, **kwargs)
             if succeed:
                 times = kwargs.get('times', 1)
                 highlight_callback = kwargs.get('highlight_callback', None)
@@ -1856,3 +1865,56 @@ class XArm(Gripper, Servo, Record, RobotIQ, BaseBoard, Track, FtSensor, ModbusTc
     @xarm_is_connected(_type='get')
     def get_trans_id(self):
         return self.arm_cmd.get_trans_id()
+        
+    @xarm_is_connected(_type='set')
+    def run_gcode_app(self, path=None, **kwargs):
+        sock = None
+        try:
+            if not os.path.exists(path):
+                dir_name = 'lite6' if self.axis == 6 and self.device_type == 9 else '850' if self.axis == 6 and self.device_type == 12 else 'xarm7T' if self.axis == 7 and self.device_type == 13 else 'xarm{}'.format(
+                    self.axis)
+                path = os.path.join('/home/uf' if sys.platform.startswith('linux') else os.path.expanduser('~'), '.UFACTORY', 'projects', 'test', dir_name, 'gcode', path)
+            if not os.path.exists(path):
+                raise FileNotFoundError('{} is not found'.format(path))
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.setblocking(True)
+            sock.settimeout(10)
+            sock.connect((self._port, 504))
+            with open(path, 'r') as f:
+                datas = f.read()
+                lines = datas.split('\n')
+            is_continue = False
+            code = APIState.NORMAL
+            for line in lines:
+                line = line.strip()
+                if line.startswith(';('):
+                    is_continue = True
+                if not line or is_continue:
+                    if line.endswith(')'):
+                        is_continue = False
+                    continue
+                if line.startswith(';'):
+                    continue
+                GCODE_PATTERN = r'([A-Z])([-+]?[0-9.]+)'
+                CLEAN_PATTERN = r'\s+|\(.*?\)|;.*'
+                data = re.sub(CLEAN_PATTERN, '', line.strip().upper())
+                if not data:
+                    return -14
+                if data[0] == '%':
+                    return -15
+                if not re.findall(GCODE_PATTERN, data):
+                    return -16
+
+                sock.send(line.strip().encode('utf-8', 'replace') + b'\n')
+                err, status, code, buffer1, buffer2 = sock.recv(5)
+                if err != 0 or code != 0:
+                    return err if err != 0 else code
+            self.wait_move(set_cnt=5)
+            return code
+        except Exception as e:
+            code = -13
+            return code
+        finally:
+            if sock:
+                sock.close()

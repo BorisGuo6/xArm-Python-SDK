@@ -38,33 +38,32 @@ else:
             sys.exit(1)
 ########################################################
 
-print(f"ip = {ip}")
-# assert False
+
 arm = XArmAPI(ip)
 arm.motion_enable(enable=True)
 arm.set_mode(0)
 arm.set_state(state=0)
 time.sleep(1)
 
-# arm.move_gohome(wait=True)
+arm.move_gohome(wait=True)
 
 # set cartesian velocity control mode
 arm.set_mode(5)
 arm.set_state(0)
 time.sleep(1)
 
-arm.vc_set_cartesian_velocity([10, 0, 0, 0, 0, 0])
-time.sleep(1)
+arm.vc_set_cartesian_velocity([100, 0, 0, 0, 0, 0])
+time.sleep(2)
 arm.vc_set_cartesian_velocity([0, -100, 0, 0, 0, 0])
-time.sleep(1)
+time.sleep(2)
 arm.vc_set_cartesian_velocity([0, 0, 100, 0, 0, 0])
-time.sleep(1)
+time.sleep(2)
 arm.vc_set_cartesian_velocity([0, 100, 0, 0, 0, 0])
-time.sleep(1)
+time.sleep(4)
 arm.vc_set_cartesian_velocity([0, 0, -100, 0, 0, 0])
-time.sleep(1)
+time.sleep(2)
 arm.vc_set_cartesian_velocity([0, -100, 0, 0, 0, 0])
-time.sleep(1)
+time.sleep(2)
 
 # stop
 arm.vc_set_cartesian_velocity([0, 0, 0, 0, 0, 0])

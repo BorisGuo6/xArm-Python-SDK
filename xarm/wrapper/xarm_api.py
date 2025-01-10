@@ -820,10 +820,11 @@ class XArmAPI(object):
         return self._arm.set_position(x=x, y=y, z=z, roll=roll, pitch=pitch, yaw=yaw, radius=radius,
                                       speed=speed, mvacc=mvacc, mvtime=mvtime, relative=relative,
                                       is_radian=is_radian, wait=wait, timeout=timeout, **kwargs)
-
+    
     def set_tool_position(self, x=0, y=0, z=0, roll=0, pitch=0, yaw=0,
                           speed=None, mvacc=None, mvtime=None, is_radian=None,
                           wait=False, timeout=None, radius=None, **kwargs):
+
         """
         Movement relative to the tool coordinate system
         Note:
